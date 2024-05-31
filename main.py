@@ -64,21 +64,26 @@ class BigramLanguageModel(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, num_embed_dim)
         self.position_embedding_table = nn.Embedding(chunk_size, num_embed_dim)
         self.lm_head = nn.Linear(num_embed_dim, vocab_size)
-        self.self_attention_head = Head(num_embed_dim)
+        self.self_attention_heads = MultiHeadAttention(4, num_embed_dim//4)
+        self.blocks = nn.Sequential(*[Block(num_embed_dim, n_head=n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(num_embed_dim)
 
     def forward(self, x, y=None):
+        B, T = x.shape
+
         token_embeddings = self.token_embedding_table(x)
-        position_embeddings = self.position_embedding_table(torch.arange(chunk_size, device=device))
+        position_embeddings = self.position_embedding_table(torch.arange(T, device=device))
         x = token_embeddings + position_embeddings
-        x = self.self_attention_head(x)
+        x = self.blocks(x)
+        x = self.ln_f(x)
         logits = self.lm_head(x)
 
         if y is None:
             loss = None
         else:
-            logits = logits.view(batch_size * chunk_size, vocab_size)
-            targets = y.view(batch_size * chunk_size)
-
+            B, T, C = logits.shape
+            logits = logits.view(B * T, C)
+            targets = y.view(B * T)
             loss = F.cross_entropy(logits, targets)
 
         return logits, loss
@@ -86,8 +91,8 @@ class BigramLanguageModel(nn.Module):
     def generate(self, current_tokens, max_new_tokens):
 
         for i in range(max_new_tokens):
-            current_tokens = current_tokens[:, -chunk_size:]
-            logits, loss = self.forward(current_tokens)
+            cropped_tokens = current_tokens[:, -chunk_size:]
+            logits, loss = self.forward(cropped_tokens)
             logits = logits[:, -1, :]
             probabilities = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probabilities, num_samples=1)
@@ -103,20 +108,70 @@ class Head(nn.Module):
         self.query = nn.Linear(num_embed_dim, head_size, bias=False)
         self.value = nn.Linear(num_embed_dim, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(chunk_size, chunk_size)))
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         # input of size (batch, time-step, channels)
         # output of size (batch, time-step, head size)
+        B, T, C = x.shape
         k = self.key(x)  # (B,T,hs)
         q = self.query(x)  # (B,T,hs)
         # compute attention scores ("affinities")
         wei = q @ k.transpose(-2, -1) * k.shape[-1] ** -0.5  # (B, T, hs) @ (B, hs, T) -> (B, T, T)
-        wei = wei.masked_fill(self.tril[:chunk_size, :chunk_size] == 0, float('-inf'))  # (B, T, T)
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))  # (B, T, T)
         wei = F.softmax(wei, dim=-1)  # (B, T, T)
+        wei = self.dropout(wei)
         # perform the weighted aggregation of the values
         v = self.value(x)  # (B,T,hs)
         out = wei @ v  # (B, T, T) @ (B, T, hs) -> (B, T, hs)
         return out
+
+
+class MultiHeadAttention(nn.Module):
+    """ multiple heads of self-attention in parallel """
+
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        self.proj = nn.Linear(head_size * num_heads, num_embed_dim)
+        self.dropout = nn.Dropout(dropout)
+    def forward(self, x):
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.dropout(self.proj(out))
+        return out
+
+
+class FeedForward(nn.Module):
+    """ a simple linear layer followed by a non-linearity """
+
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class Block(nn.Module):
+    """ Transformer block: communication followed by computation """
+
+    def __init__(self, n_embd, n_head):
+        # n_embd: embedding dimension, n_head: the number of heads we'd like
+        super().__init__()
+        self.sa = MultiHeadAttention(n_head, n_embd // n_head)
+        self.ffwd = FeedForward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
+
+    def forward(self, x):
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
 
 
 xb, yb = get_batch('train')
@@ -146,3 +201,4 @@ for i in range(epoches):
 
 print("After optimization:")
 print(decode(model.generate(current_tokens, max_new_tokens)[0].tolist()))
+
