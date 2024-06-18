@@ -6,14 +6,17 @@ with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-batch_size = 32
-chunk_size = 8
-epoches = 10000
-learning_rate = 1e-3
-eval_iters = 100
-eval_interval = 1000
-num_embed_dim = 32
-head_size = 16
+batch_size = 64
+chunk_size = 256
+epoches = 5000
+learning_rate = 3e-4
+eval_iters = 200
+eval_interval = 500
+num_embed_dim = 84
+# head_size = 16
+n_layer = 6
+n_head = 6
+dropout = 0.2
 
 # here are all the unique characters that occur in this text
 chars = sorted(list(set(text)))
@@ -64,7 +67,7 @@ class BigramLanguageModel(nn.Module):
         self.token_embedding_table = nn.Embedding(vocab_size, num_embed_dim)
         self.position_embedding_table = nn.Embedding(chunk_size, num_embed_dim)
         self.lm_head = nn.Linear(num_embed_dim, vocab_size)
-        self.self_attention_heads = MultiHeadAttention(4, num_embed_dim//4)
+        self.self_attention_heads = MultiHeadAttention(4, num_embed_dim // 4)
         self.blocks = nn.Sequential(*[Block(num_embed_dim, n_head=n_head) for _ in range(n_layer)])
         self.ln_f = nn.LayerNorm(num_embed_dim)
 
@@ -135,6 +138,7 @@ class MultiHeadAttention(nn.Module):
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
         self.proj = nn.Linear(head_size * num_heads, num_embed_dim)
         self.dropout = nn.Dropout(dropout)
+
     def forward(self, x):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
         out = self.dropout(self.proj(out))
@@ -142,7 +146,6 @@ class MultiHeadAttention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    """ a simple linear layer followed by a non-linearity """
 
     def __init__(self, n_embd):
         super().__init__()
@@ -201,4 +204,3 @@ for i in range(epoches):
 
 print("After optimization:")
 print(decode(model.generate(current_tokens, max_new_tokens)[0].tolist()))
-
