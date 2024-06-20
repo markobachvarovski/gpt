@@ -85,11 +85,11 @@ Using one head of self-attention yields an improved although insufficient result
 
 ### Feed-forward layers
 There is a simple feed-forward layer added right after the self-attention step with the purpose of allowing the tokens to think on the data independently, after self-attending.<br/>
-This layer consists of a several transformations in the following order:
+This layer consists of several transformations in the following order:
 1. A linear transformation is applied to every individual token's embedding (either the original or refined from previous training steps) which transforms the original features into a higher dimension
 2. A non-linear activation function (specifically the Rectifier Activation Function - ```ReLU()```) is applied to the output of the linear transform, to capture non-linear relationships that a simple linear layer can not represent
 3. A second linear transformation is applied to the non-linear function output to convert features into the original embedding dimension for compatibility with the other training steps
-4. A dropout layer is added (explained in detail in the [Droupout](https://github.com/markobachvarovski/gpt/README.md#dropout) section)
+4. A dropout layer is added (explained in detail in the [Dropout](https://github.com/markobachvarovski/gpt/blob/master/README.md#dropout) section)
 
 ### Residual connections
 The current feed-forward layer transforms the input features given and maps them to an entirely new transformation at every training step. But this isn't exactly accurate - ideally we'd like to learn from past input to improve the transformation, rather than transforming it anew at every step.<br/>
